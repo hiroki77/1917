@@ -15,9 +15,14 @@ download:
 transcription:
   whisper_model: "small"
   language: "ja"
-  ocr_engine: "easyocr"
-  frame_interval: 0.25
+  ocr_engine: "openai"
+  openai_api_key: ""
+  openai_model: "gpt-4o"
+  frame_interval: 0.5
   subtitle_region_ratio: 0.20
+  batch_size: 5
+  max_retries: 3
+  api_timeout: 30
 clips:
   count: 3
   min_duration: 20
