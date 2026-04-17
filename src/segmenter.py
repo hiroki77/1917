@@ -1,142 +1,90 @@
-import os
-import re
-import json
-import time
-import logging
+import os,re,json,time,logging
 from dataclasses import dataclass
-from typing import List
-
-logger = logging.getLogger(__name__)
-
+logger=logging.getLogger(__name__)
 try:
     from google import genai
     from google.genai import types as gtypes
 except ImportError:
-    genai = None
-    gtypes = None
-
+    genai=None;gtypes=None
 @dataclass
 class ClipSegment:
-    start: float
-    end: float
-    subtitles: list
-    score: float = 0.0
-    topic_summary: str = ""
-    reason: str = ""
+    start:float;end:float;subtitles:list;score:float=0.0;topic_summary:str="";reason:str=""
     @property
-    def duration(self):
-        return self.end - self.start
-
+    def duration(s):return s.end-s.start
 class TopicSegmenter:
-    TOPIC_BREAK_WORDS = ["で", "でさ", "というわけで", "次", "じゃあ", "ところで", "ちなみに", "あと", "それで", "最後に"]
-    VIRAL_WORDS = ["やばい", "マジ", "笑", "可愛い", "無理", "神", "最高", "おもろい", "怖い", "泣く", "エモい"]
-
-    def __init__(self, config):
-        self.min_dur = config["clips"]["min_duration"]
-        self.max_dur = config["clips"]["max_duration"]
-        self.clip_count = config["clips"]["count"]
-        tc = config["transcription"]
-        self._gemini = None
-        self._model = tc.get("gemini_model", "gemini-2.0-flash")
-        gkey = tc.get("gemini_api_key", "") or os.environ.get("GEMINI_API_KEY", "")
-        if gkey and genai:
-            self._gemini = genai.Client(api_key=gkey)
-
-    def select_clips(self, subtitles, video_path, preferences=None):
-        if not subtitles:
-            return []
-        if self._gemini:
-            clips = self._select_gemini(subtitles, preferences)
-            if clips:
-                return clips
-            logger.warning("Gemini失敗、ルールベースにフォールバック")
-        return self._select_rules(subtitles, preferences)
-
-    def _select_gemini(self, subtitles, preferences=None):
-        lines = []
-        for s in subtitles:
-            sp = {"aya": "綾", "junpei": "純平"}.get(s.speaker, "?")
-            lines.append(f"[{s.start:.1f}-{s.end:.1f}] {sp}: {s.text}")
-        transcript = "\n".join(lines)
-        boost = ""
-        if preferences:
-            kws = preferences.get("boost_keywords", [])
-            if kws: boost += f"\n過去バズキーワード: {", ".join(kws)}"
-            pd = preferences.get("preferred_duration", 0)
-            if pd: boost += f"\n過去バズ平均時間: {pd}秒"
-        prompt = (
-            "以下は中町兄妹(YouTube)の動画の全字幕です。"
-            f"\n\n{transcript}\n\n"
-            f"この動画から切り抜き動画を3本作ります。\n"
-            f"【必須】\n"
-            f"- {self.min_dur}秒以上{self.max_dur}秒以内\n"
-            "- 話の導入→展開→オチまで綺麗に収まること\n"
-            "- 話の途中で切れないこと\n"
-            "- 3クリップは重複しない\n"
-            "【優先】\n"
-            "- 兄妹の掛け合いが面白い部分\n"
-            "- リアクションが大きい(笑い、驚き、ツッコミ)\n"
-            "- バズりやすいキャッチーな話題\n"
-            f"{boost}\n\n"
-            "JSON配列のみ出力。説明不要。\n"
-            '[{"start":秒,"end":秒,"topic":"要約","reason":"選定理由","score":1-10},...]'
-        )
-        for attempt in range(3):
+    TB=["で","でさ","というわけで","次","じゃあ","ところで","ちなみに","あと","それで","最後に"]
+    VW=["やばい","マジ","笑","可愛い","無理","神","最高","おもろい","怖い","泣く","エモい"]
+    def __init__(s,config):
+        s.mn=config["clips"]["min_duration"];s.mx=config["clips"]["max_duration"];s.cc=config["clips"]["count"]
+        tc=config["transcription"];s._g=None;s._gm=tc.get("gemini_model","gemini-2.0-flash")
+        gk=tc.get("gemini_api_key","")or os.environ.get("GEMINI_API_KEY","")
+        if gk and genai:s._g=genai.Client(api_key=gk)
+    def select_clips(s,subs,vp,pref=None):
+        if not subs:return[]
+        if s._g:
+            c=s._gem(subs,pref)
+            if c:return c
+            logger.warning("Gemini失敗,fallback")
+        return s._rules(subs,pref)
+    def _gem(s,subs,pref=None):
+        ln=[f"[{x.start:.1f}-{x.end:.1f}] {{\"aya\":\"綾\",\"junpei\":\"純平\"}.get(x.speaker,'?')}: {x.text}" for x in subs]
+        tr="\n".join(ln)
+        bo=""
+        if pref:
+            kw=pref.get("boost_keywords",[])
+            if kw:bo+=f"\n過去バズキーワード:{",".join(kw)}"
+            pd=pref.get("preferred_duration",0)
+            if pd:bo+=f"\n過去バズ平均:{pd}s"
+        pr=(f"あなたはプロの切り抜き動画クリエイターです。以下は中町兄妹(YouTube)の全字幕です。\n\n{tr}\n\n"
+            f"「それだけ見ても面白い」切り抜きを3本作ります。\n"
+            f"【絶対条件】\n- {s.mn}-{s.mx}秒\n- 話の途中で絶対に切らない\n- 3本重複なし\n\n"
+            "【オチの定義-最重要】\n切り抜き動画はオチが全てです。以下のいずれかで終わるクリップを選んでください:\n"
+            "- 笑いのオチ:ツッコミ,ボケ,予想外の展開で笑える\n- 感動のオチ:良い話,兄妹愛\n"
+            "- 驚きのオチ:衡撃の告白,予想外の事実\n- 共感のオチ:「わかる～」な日常話\n"
+            "オチなしはNG。\n\n【構成】各1クリップ:フリ(導入)→展開→オチ\n"
+            f"【優先】兄妹の掛け合い,リアクション大,SNSシェアされそう{bo}\n\n"
+            "【出力】JSON配列のみ。\n"
+            '[{"start":秒,"end":秒,"topic":"","punchline":"オチ内容","reason":"","score":1-10},...]')
+        for a in range(3):
             try:
-                resp = self._gemini.models.generate_content(
-                    model=self._model,
-                    contents=gtypes.Content(parts=[gtypes.Part.from_text(prompt)], role="user"),
-                    config=gtypes.GenerateContentConfig(temperature=0.3, max_output_tokens=1500))
-                m = re.search(r'\[.*\]', resp.text.strip(), re.DOTALL)
-                if not m: continue
-                items = json.loads(m.group())
-                clips = []
-                for it in items[:self.clip_count]:
-                    s, e = float(it["start"]), float(it["end"])
-                    if e - s < self.min_dur: e = s + self.min_dur
-                    if e - s > self.max_dur: e = s + self.max_dur
-                    cs = [sub for sub in subtitles if sub.start >= s and sub.end <= e]
-                    clips.append(ClipSegment(start=s, end=e, subtitles=cs,
-                        score=float(it.get("score", 5)), topic_summary=it.get("topic", ""),
-                        reason=it.get("reason", "")))
-                if clips:
-                    for i, c in enumerate(clips):
-                        logger.info(f"  Clip{i+1}: {c.start:.0f}-{c.end:.0f}s ({c.duration:.0f}s) 「{c.topic_summary}」")
-                    return clips
+                r=s._g.models.generate_content(model=s._gm,contents=gtypes.Content(parts=[gtypes.Part.from_text(pr)],role="user"),config=gtypes.GenerateContentConfig(temperature=0.3,max_output_tokens=2000))
+                m_=re.search(r'\[.*\]',r.text.strip(),re.DOTALL)
+                if not m_:continue
+                it=json.loads(m_.group());cl=[]
+                for x in it[:s.cc]:
+                    st,en=float(x["start"]),float(x["end"])
+                    if en-st<s.mn:en=st+s.mn
+                    if en-st>s.mx:en=st+s.mx
+                    cs=[sub for sub in subs if sub.start>=st and sub.end<=en]
+                    cl.append(ClipSegment(start=st,end=en,subtitles=cs,score=float(x.get("score",5)),topic_summary=x.get("topic",""),reason=x.get("reason","")))
+                if cl:
+                    for i,c in enumerate(cl):logger.info(f"  Clip{i+1}:{c.start:.0f}-{c.end:.0f}s({c.duration:.0f}s) 「{c.topic_summary}」")
+                    return cl
             except Exception as e:
-                logger.warning(f"Gemini error (attempt {attempt+1}): {e}")
-                if attempt < 2: time.sleep(2 ** attempt)
-        return []
-
-    def _select_rules(self, subtitles, preferences=None):
-        bounds = [0]
-        for i in range(1, len(subtitles)):
-            if subtitles[i].start - subtitles[i-1].end > 2.0:
-                bounds.append(i); continue
-            for w in self.TOPIC_BREAK_WORDS:
-                if subtitles[i].text.startswith(w): bounds.append(i); break
-        bounds.append(len(subtitles))
-        bounds = sorted(set(bounds))
-        cands = []
-        for i in range(len(bounds)-1):
-            for j in range(i+1, len(bounds)):
-                sl = subtitles[bounds[i]:bounds[j]]
-                if not sl: continue
-                dur = sl[-1].end - sl[0].start
-                if self.min_dur <= dur <= self.max_dur:
-                    cands.append(ClipSegment(start=sl[0].start, end=sl[-1].end, subtitles=sl))
-                if dur > self.max_dur: break
-        for c in cands:
-            text = " ".join(s.text for s in c.subtitles)
-            sc = sum(3.0 for w in self.VIRAL_WORDS if w in text)
-            sc += sum(2.0 for i in range(1, len(c.subtitles))
-                      if c.subtitles[i].speaker != c.subtitles[i-1].speaker and c.subtitles[i].speaker != "unknown")
-            if 30 <= c.duration <= 45: sc += 5.0
-            c.score = sc; c.topic_summary = text[:50]
-        cands.sort(key=lambda c: c.score, reverse=True)
-        sel = []
-        for c in cands:
-            if not any(not (c.end <= s.start or c.start >= s.end) for s in sel):
-                sel.append(c)
-            if len(sel) >= self.clip_count: break
-        return sel
+                logger.warning(f"Gemini err({a+1}):{e}")
+                if a<2:time.sleep(2**a)
+        return[]
+    def _rules(s,subs,pref=None):
+        b=[0]
+        for i in range(1,len(subs)):
+            if subs[i].start-subs[i-1].end>2.0:b.append(i);continue
+            for w in s.TB:
+                if subs[i].text.startswith(w):b.append(i);break
+        b.append(len(subs));b=sorted(set(b));ca=[]
+        for i in range(len(b)-1):
+            for j in range(i+1,len(b)):
+                sl=subs[b[i]:b[j]]
+                if not sl:continue
+                d=sl[-1].end-sl[0].start
+                if s.mn<=d<=s.mx:ca.append(ClipSegment(start=sl[0].start,end=sl[-1].end,subtitles=sl))
+                if d>s.mx:break
+        for c in ca:
+            tx=" ".join(x.text for x in c.subtitles);sc=sum(3.0 for w in s.VW if w in tx)
+            sc+=sum(2.0 for i in range(1,len(c.subtitles))if c.subtitles[i].speaker!=c.subtitles[i-1].speaker and c.subtitles[i].speaker!="unknown")
+            if 30<=c.duration<=45:sc+=5.0
+            c.score=sc;c.topic_summary=tx[:50]
+        ca.sort(key=lambda c:c.score,reverse=True);se=[]
+        for c in ca:
+            if not any(not(c.end<=x.start or c.start>=x.end)for x in se):se.append(c)
+            if len(se)>=s.cc:break
+        return se
