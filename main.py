@@ -7,12 +7,13 @@ from src.transcriber import SubtitleRecognizer
 from src.segmenter import TopicSegmenter
 from src.processor import VideoProcessor
 from src.insights import InsightsEngine
+from src.drive_uploader import DriveUploader
 
-def process(monitor, dl, tr, seg, proc, ins):
+def process(monitor, dl, tr, seg, proc, ins, drive):
     logger = logging.getLogger(__name__)
     try:
         for video in monitor.check_new_videos():
-            logger.info(f"Processing: {video['title']}")
+            logger.info(f"=== {video['title']} ===")
             send_termux_notification("新着動画", video["title"])
             vp = None
             try:
@@ -22,9 +23,10 @@ def process(monitor, dl, tr, seg, proc, ins):
                 for i, clip in enumerate(clips[:3]):
                     out = proc.create_clip(vp, clip, subs, i+1)
                     ins.record_clip({"duration": clip.duration, "score": clip.score, "topic": clip.topic_summary})
-                    logger.info(f"Clip {i+1}: {out}")
+                    drive.upload(out)
+                    logger.info(f"Clip {i+1} -> Drive: {out}")
                 monitor.mark_processed(video["id"])
-                send_termux_notification("完了", f"{video['title']} - 3本作成")
+                send_termux_notification("完了", f"{video['title']} 3本作成→Drive")
             except Exception as e:
                 logger.error(f"Error: {e}", exc_info=True)
             finally:
@@ -47,15 +49,17 @@ def main():
     seg = TopicSegmenter(config)
     proc = VideoProcessor(config)
     ins = InsightsEngine(config)
+    drive = DriveUploader(config)
     if args.insights:
         import json
         with open(args.insights, "r", encoding="utf-8") as f:
             ins.update_insights(json.load(f))
     if args.once:
-        process(mon, dl, tr, seg, proc, ins)
+        process(mon, dl, tr, seg, proc, ins, drive)
     else:
         iv = config["monitor"]["check_interval"]
-        run = lambda: process(mon, dl, tr, seg, proc, ins)
+        send_termux_notification("監視開始", f"{iv}秒間隔")
+        run = lambda: process(mon, dl, tr, seg, proc, ins, drive)
         schedule.every(iv).seconds.do(run)
         run()
         while True:

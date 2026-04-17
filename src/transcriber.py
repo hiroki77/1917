@@ -19,9 +19,9 @@ try:
 except ImportError:
     whisper = None
 try:
-    from openai import OpenAI
+    from google import genai
 except ImportError:
-    OpenAI = None
+    genai = None
 try:
     import easyocr
 except ImportError:
@@ -52,76 +52,84 @@ class SubtitleRecognizer:
         tc = config["transcription"]
         self.whisper_model_name = tc["whisper_model"]
         self.language = tc["language"]
-        self.ocr_engine = tc.get("ocr_engine", "openai")
+        self.ocr_engine = tc.get("ocr_engine", "gemini")
         self.frame_interval = tc["frame_interval"]
         self.subtitle_region_ratio = tc["subtitle_region_ratio"]
-        self.batch_size = tc.get("batch_size", 5)
+        self.batch_size = tc.get("batch_size", 4)
         self.max_retries = tc.get("max_retries", 3)
         self.api_timeout = tc.get("api_timeout", 30)
         self.temp_dir = config["paths"]["temp_dir"]
-        self._openai = None
-        self._openai_model = tc.get("openai_model", "gpt-4o")
-        api_key = tc.get("openai_api_key", "") or os.environ.get("OPENAI_API_KEY", "")
-        if api_key and OpenAI:
-            self._openai = OpenAI(api_key=api_key, timeout=self.api_timeout)
+        self._gemini_client = None
+        self._gemini_model = tc.get("gemini_model", "gemini-2.0-flash")
+        gkey = tc.get("gemini_api_key", "") or os.environ.get("GEMINI_API_KEY", "")
+        if gkey and genai:
+            self._gemini_client = genai.Client(api_key=gkey)
         self._whisper_model = None
         self._ocr_reader = None
 
     def recognize(self, video_path):
         whisper_segs = self._run_whisper(video_path)
-        if self.ocr_engine == "openai" and self._openai:
-            ocr_segs = self._run_openai_ocr(video_path)
+        logger.info(f"Whisper: {len(whisper_segs)} segs")
+        if self.ocr_engine == "gemini" and self._gemini_client:
+            ocr_segs = self._run_gemini_ocr(video_path)
         else:
-            ocr_segs = self._run_easyocr_pipeline(video_path)
+            ocr_segs = self._run_easyocr(video_path)
+        logger.info(f"OCR: {len(ocr_segs)} segs")
         return self._merge(whisper_segs, ocr_segs)
 
-    def _run_openai_ocr(self, video_path):
+    def _run_gemini_ocr(self, video_path):
         w, h = get_video_resolution(video_path)
         sub_y = int(h * (1 - self.subtitle_region_ratio))
         frames_dir = os.path.join(self.temp_dir, "frames_ocr")
         os.makedirs(frames_dir, exist_ok=True)
         try:
             fps = 1.0 / self.frame_interval
-            run_ffmpeg(["-i", str(video_path), "-vf", f"fps={fps},crop=iw:{h-sub_y}:0:{sub_y}", "-q:v", "2", os.path.join(frames_dir, "f_%06d.jpg")], timeout=1200)
-            frame_files = sorted(Path(frames_dir).glob("f_*.jpg"))
-            if not frame_files:
+            run_ffmpeg(["-i", str(video_path), "-vf",
+                        f"fps={fps},crop=iw:{h-sub_y}:0:{sub_y}",
+                        "-q:v", "2", os.path.join(frames_dir, "f_%06d.jpg")],
+                       timeout=1200)
+            frames = sorted(Path(frames_dir).glob("f_*.jpg"))
+            if not frames:
                 return []
             all_results = []
-            for bi in range(0, len(frame_files), self.batch_size):
-                batch = frame_files[bi:bi+self.batch_size]
-                batch_ts = [(bi+i)*self.frame_interval for i in range(len(batch))]
-                results = self._ocr_batch_retry(batch, batch_ts)
+            for bi in range(0, len(frames), self.batch_size):
+                batch = frames[bi:bi + self.batch_size]
+                batch_ts = [(bi + i) * self.frame_interval for i in range(len(batch))]
+                results = self._gemini_batch_retry(batch, batch_ts)
                 all_results.extend(results)
+                time.sleep(4.5)
             return self._group_ocr(all_results)
         finally:
             shutil.rmtree(frames_dir, ignore_errors=True)
 
-    def _ocr_batch_retry(self, paths, timestamps):
+    def _gemini_batch_retry(self, paths, timestamps):
         for attempt in range(self.max_retries):
             try:
-                return self._ocr_batch(paths, timestamps)
+                return self._gemini_batch(paths, timestamps)
             except Exception as e:
-                logger.warning(f"OCR API error (attempt {attempt+1}): {e}")
+                logger.warning(f"Gemini OCR error (attempt {attempt+1}): {e}")
                 if attempt < self.max_retries - 1:
-                    time.sleep(2 ** attempt)
+                    time.sleep(2 ** (attempt + 1))
                 else:
                     return [(ts, "", "unknown", "normal") for ts in timestamps]
 
-    def _ocr_batch(self, paths, timestamps):
-        content = [{"type": "text", "text": (
+    def _gemini_batch(self, paths, timestamps):
+        from google.genai import types as gtypes
+        parts = [gtypes.Part.from_text(
             "以下の画像はYouTube動画の字幕(テロップ)部分です。"
-            "各画像についてJSON配列で答えてください。テキストがない画像も含めて全画像分返してください。\n"
-            '[{"text": "表示テキスト(なければ空文字)", "color": "pink/cyan/other", "style": "normal/emphasis"}, ...]\n'
-            "JSONのみ出力。説明不要。")}]
+            "各画像についてJSON配列で答えてください。"
+            "テキストがない画像も含め全画像分返してください。\n"
+            '[{"text":"表示テキスト(空文字可)","color":"pink/cyan/other",'
+            '"style":"normal/emphasis"},...]\n'
+            "JSONのみ出力。説明不要。")]
         for fp in paths:
             with open(fp, "rb") as f:
-                b64 = base64.b64encode(f.read()).decode("utf-8")
-            content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}", "detail": "high"}})
-        resp = self._openai.chat.completions.create(
-            model=self._openai_model,
-            messages=[{"role": "user", "content": content}],
-            max_tokens=1000, temperature=0)
-        raw = resp.choices[0].message.content.strip()
+                parts.append(gtypes.Part.from_bytes(data=f.read(), mime_type="image/jpeg"))
+        resp = self._gemini_client.models.generate_content(
+            model=self._gemini_model,
+            contents=gtypes.Content(parts=parts, role="user"),
+            config=gtypes.GenerateContentConfig(temperature=0, max_output_tokens=1000))
+        raw = resp.text.strip()
         m = re.search(r'\[.*\]', raw, re.DOTALL)
         if not m:
             return [(ts, "", "unknown", "normal") for ts in timestamps]
@@ -139,7 +147,7 @@ class SubtitleRecognizer:
                 results.append((ts, "", "unknown", "normal"))
         return results
 
-    def _run_easyocr_pipeline(self, video_path):
+    def _run_easyocr(self, video_path):
         if cv2 is None or easyocr is None:
             return []
         w, h = get_video_resolution(video_path)
@@ -148,7 +156,9 @@ class SubtitleRecognizer:
         os.makedirs(frames_dir, exist_ok=True)
         try:
             fps = 1.0 / self.frame_interval
-            run_ffmpeg(["-i", str(video_path), "-vf", f"fps={fps},crop=iw:{h-sub_y}:0:{sub_y}", "-q:v", "2", os.path.join(frames_dir, "f_%06d.jpg")], timeout=1200)
+            run_ffmpeg(["-i", str(video_path), "-vf",
+                        f"fps={fps},crop=iw:{h-sub_y}:0:{sub_y}",
+                        "-q:v", "2", os.path.join(frames_dir, "f_%06d.jpg")], timeout=1200)
             if self._ocr_reader is None:
                 self._ocr_reader = easyocr.Reader(["ja", "en"], gpu=False)
             raw = []
@@ -161,11 +171,11 @@ class SubtitleRecognizer:
                 if not (0.01 < np.sum(gray > 180) / gray.size < 0.40):
                     raw.append((ts, "", "unknown", "normal"))
                     continue
-                ocr_res = self._ocr_reader.readtext(str(fp), detail=1, paragraph=True)
-                if not ocr_res:
+                res = self._ocr_reader.readtext(str(fp), detail=1, paragraph=True)
+                if not res:
                     raw.append((ts, "", "unknown", "normal"))
                     continue
-                text = "".join(d[1] for d in ocr_res if len(d) >= 2).strip()
+                text = "".join(d[1] for d in res if len(d) >= 2).strip()
                 hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
                 pink = np.sum(cv2.inRange(hsv, self.AYA_HSV_LOWER, self.AYA_HSV_UPPER) > 0)
                 cyan = np.sum(cv2.inRange(hsv, self.JUNPEI_HSV_LOWER, self.JUNPEI_HSV_UPPER) > 0)
