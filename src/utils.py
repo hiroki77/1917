@@ -21,8 +21,7 @@ def setup_logging(config):
     logging.basicConfig(
         level=getattr(logging, config["logging"]["level"]),
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        handlers=[logging.FileHandler(log_file, encoding="utf-8"), logging.StreamHandler()],
-    )
+        handlers=[logging.FileHandler(log_file, encoding="utf-8"), logging.StreamHandler()])
 
 def run_ffmpeg(args, timeout=600):
     cmd = ["ffmpeg", "-y"] + args
@@ -32,22 +31,19 @@ def run_ffmpeg(args, timeout=600):
     return result
 
 def run_ffprobe(args):
-    cmd = ["ffprobe"] + args
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    result = subprocess.run(["ffprobe"] + args, capture_output=True, text=True, timeout=30)
     if result.returncode != 0:
         raise RuntimeError(f"FFprobe error: {result.stderr}")
     return result.stdout
 
 def get_video_info(video_path):
-    output = run_ffprobe(["-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", str(video_path)])
-    return json.loads(output)
+    return json.loads(run_ffprobe(["-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", str(video_path)]))
 
 def get_video_duration(video_path):
     return float(get_video_info(video_path)["format"]["duration"])
 
 def get_video_resolution(video_path):
-    info = get_video_info(video_path)
-    for s in info["streams"]:
+    for s in get_video_info(video_path)["streams"]:
         if s["codec_type"] == "video":
             return s["width"], s["height"]
     return 1920, 1080
@@ -56,8 +52,7 @@ def seconds_to_ass_time(seconds):
     h = int(seconds // 3600)
     m = int((seconds % 3600) // 60)
     s = seconds % 60
-    cs = int((s - int(s)) * 100)
-    return f"{h}:{m:02d}:{int(s):02d}.{cs:02d}"
+    return f"{h}:{m:02d}:{int(s):02d}.{int((s - int(s)) * 100):02d}"
 
 def send_termux_notification(title, message):
     try:
@@ -67,8 +62,7 @@ def send_termux_notification(title, message):
 
 def ensure_font_installed(config):
     font_dir = config["paths"]["fonts_dir"]
-    font_files = list(Path(font_dir).glob("*.ttf")) + list(Path(font_dir).glob("*.otf"))
-    if not font_files:
+    if not (list(Path(font_dir).glob("*.ttf")) + list(Path(font_dir).glob("*.otf"))):
         logging.getLogger(__name__).warning(f"fonts/ にけいふぉんと(.ttf/.otf)を配置してください")
         return False
     return True

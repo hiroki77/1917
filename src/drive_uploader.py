@@ -29,14 +29,13 @@ class DriveUploader:
             try:
                 r = subprocess.run(["rclone", "copy", file_path, dest, "--retries", "3"], capture_output=True, text=True, timeout=300)
                 if r.returncode == 0:
-                    logger.info(f"Driveアップロード完了: {os.path.basename(file_path)}")
+                    logger.info(f"Drive: {os.path.basename(file_path)}")
                     return True
-                logger.warning(f"rclone error: {r.stderr}")
             except FileNotFoundError:
-                logger.error("rclone未インストール: pkg install rclone")
+                logger.error("rclone未インストール")
                 return False
             except subprocess.TimeoutExpired:
-                logger.warning(f"rclone timeout (attempt {attempt+1})")
+                pass
             import time; time.sleep(5)
         return False
 
@@ -49,7 +48,6 @@ class DriveUploader:
                 subprocess.run(["termux-media-scan", dest], timeout=10)
             except (FileNotFoundError, subprocess.TimeoutExpired):
                 pass
-            logger.info(f"共有ストレージにコピー: {dest}")
             return True
         except Exception as e:
             logger.error(f"コピー失敗: {e}")

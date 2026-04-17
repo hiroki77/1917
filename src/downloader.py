@@ -8,7 +8,6 @@ logger = logging.getLogger(__name__)
 
 class VideoDownloader:
     def __init__(self, config):
-        self.config = config
         self.temp_dir = config["paths"]["temp_dir"]
         self.quality = config["download"]["quality"]
         os.makedirs(self.temp_dir, exist_ok=True)

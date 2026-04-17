@@ -7,7 +7,6 @@ logger = logging.getLogger(__name__)
 
 class VideoProcessor:
     def __init__(self, config):
-        self.config = config
         self.zoom = config["video"]["zoom_factor"]
         self.crf = config["video"]["crf"]
         self.codec = config["video"]["codec"]
@@ -30,10 +29,9 @@ class VideoProcessor:
             run_ffmpeg(["-i", seg, "-vf", f"scale={zw}:{zh},crop={w}:{h}:{cx}:{cy}", "-c:v", self.codec, "-crf", str(self.crf), "-c:a", "aac", zoomed], timeout=300)
             clip_subs = [s for s in subtitles if s.start >= clip.start and s.end <= clip.end]
             self._write_ass(clip_subs, clip.start, ass, w, h)
-            fonts_dir = self.config["paths"]["fonts_dir"]
+            fonts_dir = os.path.join(os.path.dirname(self.output_dir), "fonts")
             vf = f"ass={ass}:fontsdir={fonts_dir}" if os.path.isdir(fonts_dir) and os.listdir(fonts_dir) else f"ass={ass}"
             run_ffmpeg(["-i", zoomed, "-vf", vf, "-c:v", self.codec, "-crf", str(self.crf), "-c:a", "copy", out], timeout=300)
-            send_termux_notification("切り抜き完成", f"Clip {index}: {clip.duration:.0f}秒")
             return out
         finally:
             for p in [seg, zoomed, ass]:
@@ -42,13 +40,9 @@ class VideoProcessor:
 
     def _write_ass(self, subs, clip_start, path, w, h):
         font = self.sub_cfg["font_name"]
-        ns = self.sub_cfg["normal_font_size"]
-        es = self.sub_cfg["emphasis_font_size"]
-        sw = self.sub_cfg["stroke_width"]
-        mv = self.sub_cfg["margin_v"]
-        ac = self._rgb2ass(self.sub_cfg["aya_color"])
-        jc = self._rgb2ass(self.sub_cfg["junpei_color"])
-        sc = self._rgb2ass(self.sub_cfg["stroke_color"])
+        ns, es = self.sub_cfg["normal_font_size"], self.sub_cfg["emphasis_font_size"]
+        sw, mv = self.sub_cfg["stroke_width"], self.sub_cfg["margin_v"]
+        ac, jc, sc = self._rgb2ass(self.sub_cfg["aya_color"]), self._rgb2ass(self.sub_cfg["junpei_color"]), self._rgb2ass(self.sub_cfg["stroke_color"])
         header = (f"[Script Info]\nScriptType: v4.00+\nPlayResX: {w}\nPlayResY: {h}\nScaledBorderAndShadow: yes\n\n"
                   f"[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
                   f"Style: AyaNormal,{font},{ns},{ac},&H000000FF,{sc},&H80000000,-1,0,0,0,100,100,0,0,1,{sw},0,2,10,10,{mv},1\n"
