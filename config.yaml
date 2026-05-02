@@ -1,0 +1,64 @@
+channel:
+  name: "中町兄妹"
+  channel_id: ""
+  search_query: "中町兄妹"
+paths:
+  output_dir: "./output"
+  temp_dir: "./temp"
+  data_dir: "./data"
+  fonts_dir: "./fonts"
+  logs_dir: "./logs"
+download:
+  quality: "bestvideo[height<=1080]+bestaudio/best[height<=1080]"
+  format: "mp4"
+  max_filesize: "2G"
+transcription:
+  whisper_model: "small"
+  language: "ja"
+  ocr_engine: "gemini"
+  gemini_api_key: ""
+  gemini_model: "gemini-2.0-flash"
+  frame_interval: 0.5
+  subtitle_region_ratio: 0.20
+  batch_size: 4
+  max_retries: 3
+  api_timeout: 30
+clips:
+  count: 3
+  min_duration: 20
+  max_duration: 60
+subtitles:
+  font_name: "けいふぉんと"
+  normal_font_size: 48
+  emphasis_font_size: 64
+  stroke_color: "FFFFFF"
+  stroke_width: 3
+  aya_color: "FF69B4"
+  junpei_color: "00FFFF"
+  margin_v: 30
+video:
+  zoom_factor: 1.15
+  crf: 18
+  codec: "libx264"
+  output_format: "mp4"
+monitor:
+  check_interval: 300
+  rss_url: ""
+drive:
+  enabled: true
+  method: "rclone"
+  rclone_remote: "gdrive"
+  remote_folder: "中町兄妹_切り抜き"
+  shared_path: "/storage/emulated/0/Movies/切り抜き"
+insights:
+  enabled: true
+  data_file: "./data/insights.json"
+  history_file: "./data/history.json"
+phone:
+  optimized: true
+  battery_save: true
+  notification: true
+logging:
+  level: "INFO"
+  file: "./logs/automation.log"
+  max_size_mb: 50
